@@ -5,14 +5,29 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "driver/gpio.h"
+
 static const char *TAG = "BMS_APP";
 
-#define I2C_MASTER_SCL_IO           22      /*!< GPIO number used for I2C master clock */
-#define I2C_MASTER_SDA_IO           21      /*!< GPIO number used for I2C master data */
-#define I2C_MASTER_NUM              0       /*!< I2C master i2c port number, the number of i2c peripheral interfaces available will depend on the chip */
+// ============================================================
+// BATTERY TYPE CONFIGURATION
+// ============================================================
+// เปลี่ยนค่านี้เพื่อเลือกประเภทแบตเตอรี่:
+//   0 = LFP (LiFePO4)  - COV: 3.65V, CUV: 2.0V
+//   1 = Li-ion (NMC/LCO) - COV: 4.2V, CUV: 3.0V
+// ============================================================
+#define BATTERY_TYPE    1   // <-- เปลี่ยนที่นี่: 0=LFP, 1=Li-ion
+// ============================================================
+
+#define I2C_MASTER_SCL_IO           6       /*!< GPIO number used for I2C master clock */
+#define I2C_MASTER_SDA_IO           7       /*!< GPIO number used for I2C master data */
+#define I2C_MASTER_NUM              0       /*!< I2C master i2c port number */
 #define I2C_MASTER_FREQ_HZ          100000  /*!< I2C master clock frequency */
 #define I2C_MASTER_TX_BUF_DISABLE   0       /*!< I2C master doesn't need buffer */
 #define I2C_MASTER_RX_BUF_DISABLE   0       /*!< I2C master doesn't need buffer */
+
+#define GPIO_PIN_CHECK              GPIO_NUM_18
+#define GPIO_PIN_ALERT              GPIO_NUM_19
 
 static esp_err_t i2c_master_init(void)
 {
@@ -35,86 +50,121 @@ static esp_err_t i2c_master_init(void)
     return i2c_driver_install((i2c_port_t)i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
-void setup_li_ion(BQ76905 &bms) {
-    ESP_LOGI(TAG, "Configuring for Li-Ion (3.7V nominal, 4.2V max)");
-    // Li-Ion: OV=4.25V, UV=2.8V
-    // Register values depend on datasheet scaling. 
-    // Assuming OV_TRIP step is approx 50mV/LSB and UV is similar (check datasheet for exact scale)
-    // Placeholder values: 
-    // OV 4.25V -> 0xAC (example)
-    // UV 2.8V -> 0x97 (example)
-    // PROTECT1: SCD/OCD (Short Circuit / Over Current)
-    
-    bms.setProtections(0xAC, 0x97, 0x05, 0x05, 0x00);
-}
-
-void setup_lfp(BQ76905 &bms) {
-    ESP_LOGI(TAG, "Configuring for LiFePO4 (LFP) (3.2V nominal, 3.65V max)");
-    // LFP: OV=3.7V, UV=2.5V
-    // Placeholder values:
-    // OV 3.7V -> 0x8C (example)
-    // UV 2.5V -> 0x80 (example)
-    
-    bms.setProtections(0x8C, 0x80, 0x05, 0x05, 0x00);
-}
-
 extern "C" void app_main(void)
 {
-    ESP_ERROR_CHECK(i2c_master_init());
-    ESP_LOGI(TAG, "I2C initialized successfully");
+    // Initialize GPIOs
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = (1ULL << GPIO_PIN_CHECK) | (1ULL << GPIO_PIN_ALERT);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE; // Assume pull-up needed for checking "LOW"
+    gpio_config(&io_conf);
 
-    BQ76905 bms((i2c_port_t)I2C_MASTER_NUM);
+    // Check if GPIO 18 is LOW
+    if (gpio_get_level(GPIO_PIN_CHECK) == 0) {
+        ESP_LOGI(TAG, "GPIO 18 is LOW, proceeding with BMS configuration...");
 
-    if (bms.begin() == ESP_OK) {
-        ESP_LOGI(TAG, "BMS initialized successfully");
-        
-        // Example usage:
-        // Uncomment the chemistry you want to test
-        setup_li_ion(bms);
-        // setup_lfp(bms);
-        
-        uint16_t pack_voltage = 0;
-        if (bms.getPackVoltage(pack_voltage) == ESP_OK) {
-            ESP_LOGI(TAG, "Pack Voltage: %d mV", pack_voltage);
-        } else {
-            ESP_LOGE(TAG, "Failed to read pack voltage");
-        }
+        ESP_ERROR_CHECK(i2c_master_init());
+        ESP_LOGI(TAG, "I2C initialized successfully");
 
-        int16_t current_ma = 0;
-        if (bms.getCurrent(current_ma) == ESP_OK) {
-            ESP_LOGI(TAG, "Current: %d mA", current_ma);
-        } else {
-            ESP_LOGE(TAG, "Failed to read current");
-        }
+        BQ76905 bms((i2c_port_t)I2C_MASTER_NUM);
 
-        float temp_c = 0.0f;
-        if (bms.getTemperature(temp_c) == ESP_OK) {
-            ESP_LOGI(TAG, "Temperature: %.2f C", temp_c);
-        } else {
-            ESP_LOGE(TAG, "Failed to read temperature");
-        }
+        if (bms.begin() == ESP_OK) {
+            ESP_LOGI(TAG, "BMS initialized successfully");
 
-        // Read first 5 cells (assuming 5S for this test, though chip supports up to 15)
-        for (int i = 1; i <= 5; i++) {
-            uint16_t cell_vol = 0;
-            if (bms.getCellVoltage(i, cell_vol) == ESP_OK) {
-                ESP_LOGI(TAG, "Cell %d Voltage: %d mV", i, cell_vol);
+            // ============================================================
+            // Full BMS Configuration (based on BATTERY_TYPE define)
+            // ============================================================
+            // This configures:
+            // - System (DA Config, Cell Count, FET Options)
+            // - Voltage Protection (COV, CUV)
+            // - Current Protection (OCC, OCD1, OCD2, SCD)
+            // - Temperature Protection (OTC, OTD, UTC, UTD)
+            // - Protection Enable Registers
+            // ============================================================
+            
+#if BATTERY_TYPE == 0
+            // LFP (LiFePO4) battery - 18650Fe1600-WT
+            esp_err_t setup_result = bms.fullConfiguration(BQ76905::BatteryType::LFP, 5);
+#else
+            // Li-ion (NMC/LCO) battery
+            esp_err_t setup_result = bms.fullConfiguration(BQ76905::BatteryType::LiIon, 5);
+#endif
+            
+            if (setup_result == ESP_OK) {
+                ESP_LOGI(TAG, ">>> Full Configuration Result: SUCCESS <<<");
+            } else {
+                ESP_LOGE(TAG, ">>> Full Configuration Result: FAILED (0x%x) <<<", setup_result);
             }
+            
+            ESP_LOGI(TAG, "");
+            ESP_LOGI(TAG, "==============================================");
+            ESP_LOGI(TAG, "Full configuration complete. Starting monitoring loop...");
+            ESP_LOGI(TAG, "==============================================");
+
+            while (1) {
+                // Repeatedly read status every 5 seconds
+                vTaskDelay(pdMS_TO_TICKS(5000));
+
+                ESP_LOGI(TAG, "--- Reading BMS Data ---");
+
+                int16_t current_usera = 0;
+                if (bms.getCurrent(current_usera) == ESP_OK) {
+                    ESP_LOGI(TAG, "Current (userA): %d", current_usera);
+                } else {
+                    ESP_LOGW(TAG, "Current read failed");
+                }
+
+                float temp_c = 0.0f;
+                if (bms.getTemperature(temp_c) == ESP_OK) {
+                    ESP_LOGI(TAG, "Internal Temperature: %.2f C", temp_c);
+                } else {
+                    ESP_LOGW(TAG, "Internal Temperature read failed");
+                }
+                
+                float ts_temp_c = 0.0f;
+                if (bms.getTSTemperature(ts_temp_c) == ESP_OK) {
+                    ESP_LOGI(TAG, "TS (NTC) Temperature: %.2f C", ts_temp_c);
+                } else {
+                    ESP_LOGW(TAG, "TS Temperature read failed");
+                }
+
+                uint32_t cell_sum_mv = 0;
+                ESP_LOGI(TAG, "Scanning all cell voltages (1-%u):", BQ76905::kMaxCells);
+                for (uint8_t i = 1; i <= BQ76905::kMaxCells; i++) {
+                    uint16_t cell_vol = 0;
+                    esp_err_t err = bms.getCellVoltage(i, cell_vol);
+                    if (err == ESP_OK && cell_vol > 0) {
+                        ESP_LOGI(TAG, "  Cell %u: %u mV", i, cell_vol);
+                        if (cell_vol > 1000 && cell_vol < 5000) {
+                            cell_sum_mv += cell_vol;
+                        }
+                    }
+                }
+
+                ESP_LOGI(TAG, "Sum of Cells: %lu mV", cell_sum_mv);
+
+                uint16_t pack_voltage = 0;
+                if (bms.getPackVoltage(pack_voltage) == ESP_OK) {
+                    ESP_LOGI(TAG, "Pack Register: %u mV", pack_voltage);
+                } else {
+                    ESP_LOGW(TAG, "Pack voltage read failed");
+                }
+
+                ESP_LOGI(TAG, "Alert Pin: %d", gpio_get_level(GPIO_PIN_ALERT));
+                ESP_LOGI(TAG, "------------------------");
+            }
+        } else {
+            ESP_LOGE(TAG, "BMS initialization failed");
         }
-
-        // Enable balancing for Cell 1 and 2
-        // bms.enableBalancing(0x0003); 
-
     } else {
-        ESP_LOGE(TAG, "BMS initialization failed");
+        ESP_LOGW(TAG, "GPIO 18 is HIGH. BMS configuration skipped.");
     }
 
+    // If skipped or failed, just loop doing nothing or maybe check again?
+    // Usually app_main shouldn't return.
     while (1) {
-        // Repeatedly read status every 5 seconds
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        
-        uint16_t pack_voltage = 0;
-        bms.getPackVoltage(pack_voltage);
-        ESP_LOGI(TAG, "Pack: %d mV", pack_voltage);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
