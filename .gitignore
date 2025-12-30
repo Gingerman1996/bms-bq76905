@@ -15,3 +15,7 @@ compile_commands.json
 
 # Component manager
 /managed_components/
+
+# env files
+.env
+/documents/
