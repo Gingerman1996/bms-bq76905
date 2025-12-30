@@ -21,3 +21,4 @@ compile_commands.json
 /documents/
 .cache/
 .vscode/
+partitions_8mb.csv
