@@ -1,0 +1,17 @@
+# ESP-IDF build output
+/build/
+build*/
+
+# Generated config
+/sdkconfig
+/sdkconfig.old
+
+# CMake/Ninja (in-tree builds)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+ninja*
+compile_commands.json
+
+# Component manager
+/managed_components/
