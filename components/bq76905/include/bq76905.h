@@ -8,34 +8,48 @@
 
 class BQ76905 {
 public:
-    // Direct command addresses (BQ76905)
+    // Direct command register addresses (BQ76905)
     enum class Reg : uint8_t {
-        ControlStatus = 0x00,
-        SafetyAlertA = 0x02,
-        SafetyStatusA = 0x03,
-        SafetyAlertB = 0x04,
-        SafetyStatusB = 0x05,
-        BatteryStatus = 0x12,
-        Cell1Voltage = 0x14,
-        Cell2Voltage = 0x16,
-        Cell3Voltage = 0x18,
-        Cell4Voltage = 0x1A,
-        Cell5Voltage = 0x1C,
-        Reg18Voltage = 0x22,
-        VssVoltage = 0x24,
-        StackVoltage = 0x26,
-        IntTemperature = 0x28,
-        TsMeasurement = 0x2A,
-        RawCurrent = 0x36,
-        Current = 0x3A,
-        Cc1Current = 0x3C,
-        AlarmStatus = 0x62,
-        AlarmRaw = 0x64,
-        AlarmEnable = 0x66,
-        FetControl = 0x68,
-        RegoutControl = 0x69,
-        DsgPwm = 0x6A,
-        ChgPwm = 0x6C,
+        // Status registers
+        ControlStatus  = 0x00,   // Control and status register
+        SafetyAlertA   = 0x02,   // Safety alert A
+        SafetyStatusA  = 0x03,   // Safety status A
+        SafetyAlertB   = 0x04,   // Safety alert B
+        SafetyStatusB  = 0x05,   // Safety status B
+        BatteryStatus  = 0x12,   // Battery status
+        
+        // Voltage measurement registers
+        Cell1Voltage   = 0x14,   // Cell 1 voltage
+        Cell2Voltage   = 0x16,   // Cell 2 voltage
+        Cell3Voltage   = 0x18,   // Cell 3 voltage
+        Cell4Voltage   = 0x1A,   // Cell 4 voltage
+        Cell5Voltage   = 0x1C,   // Cell 5 voltage
+        Reg18Voltage   = 0x22,   // REG18 voltage
+        VssVoltage     = 0x24,   // VSS voltage
+        StackVoltage   = 0x26,   // Stack (pack) voltage
+        
+        // Temperature and current registers
+        IntTemperature = 0x28,   // Internal temperature
+        TsMeasurement  = 0x2A,   // TS (NTC thermistor) measurement
+        RawCurrent     = 0x36,   // Raw current (24-bit)
+        Current        = 0x3A,   // Current (16-bit)
+        Cc1Current     = 0x3C,   // CC1 current
+        
+        // Subcommand and Data Memory access registers
+        SubcommandLow  = 0x3E,   // Subcommand address LSB / Data Memory access
+        SubcommandHigh = 0x3F,   // Subcommand address MSB
+        TransferBuffer = 0x40,   // Transfer buffer start (0x40-0x5F)
+        Checksum       = 0x60,   // Checksum for Data Memory write
+        DataLength     = 0x61,   // Data length for Data Memory write
+        
+        // Alarm and control registers
+        AlarmStatus    = 0x62,   // Alarm status
+        AlarmRaw       = 0x64,   // Alarm raw
+        AlarmEnable    = 0x66,   // Alarm enable
+        FetControl     = 0x68,   // FET control
+        RegoutControl  = 0x69,   // REGOUT control
+        DsgPwm         = 0x6A,   // Discharge PWM
+        ChgPwm         = 0x6C,   // Charge PWM
     };
 
     // Subcommand addresses for Data Memory access

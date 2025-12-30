@@ -199,14 +199,14 @@ esp_err_t BQ76905::clearAlarmStatus(uint8_t mask) {
 // ========== Subcommand Access Functions ==========
 
 esp_err_t BQ76905::sendSubcommand(SubCmd cmd) {
-    // Subcommand is sent by writing 16-bit value to register 0x3E
+    // Subcommand is sent by writing 16-bit value to SubcommandLow register
     uint16_t cmd_val = static_cast<uint16_t>(cmd);
     uint8_t data[2] = {
         (uint8_t)(cmd_val & 0xFF),         // LSB
         (uint8_t)((cmd_val >> 8) & 0xFF),  // MSB
     };
     
-    ESP_LOGI(TAG_BQ, "[SUBCMD] Sending subcommand 0x%04X to register 0x3E", cmd_val);
+    ESP_LOGI(TAG_BQ, "[SUBCMD] Sending subcommand 0x%04X to register 0x%02X", cmd_val, static_cast<uint8_t>(Reg::SubcommandLow));
     ESP_LOGI(TAG_BQ, "  -> Data: [0x%02X, 0x%02X]", data[0], data[1]);
     
     i2c_cmd_handle_t i2c_cmd = i2c_cmd_link_create();
@@ -217,7 +217,7 @@ esp_err_t BQ76905::sendSubcommand(SubCmd cmd) {
 
     i2c_master_start(i2c_cmd);
     i2c_master_write_byte(i2c_cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_cmd, 0x3E, true);  // Subcommand register address
+    i2c_master_write_byte(i2c_cmd, static_cast<uint8_t>(Reg::SubcommandLow), true);
     i2c_master_write(i2c_cmd, data, 2, true);
     i2c_master_stop(i2c_cmd);
 
@@ -233,10 +233,10 @@ esp_err_t BQ76905::sendSubcommand(SubCmd cmd) {
 }
 
 esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, size_t len) {
-    // 1. Write address to 0x3E (LSB) and 0x3F (MSB)
-    // 2. Write data to Transfer Buffer starting at 0x40
-    // 3. Calculate and write checksum to 0x60
-    // 4. Write length to 0x61
+    // 1. Write address to SubcommandLow (LSB) and SubcommandHigh (MSB)
+    // 2. Write data to Transfer Buffer starting at TransferBuffer
+    // 3. Calculate and write checksum to Checksum register
+    // 4. Write length to DataLength register
     
     ESP_LOGI(TAG_BQ, "[DATA_MEM] Writing to Data Memory address 0x%04X, len=%d", address, (int)len);
     
@@ -262,7 +262,8 @@ esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, si
     }
     uint8_t checksum = ~((uint8_t)(sum & 0xFF));
     
-    ESP_LOGI(TAG_BQ, "  -> Step 1: Write to 0x3E: addr=[0x%02X, 0x%02X], data=[0x%02X, 0x%02X]",
+    ESP_LOGI(TAG_BQ, "  -> Step 1: Write to 0x%02X: addr=[0x%02X, 0x%02X], data=[0x%02X, 0x%02X]",
+             static_cast<uint8_t>(Reg::SubcommandLow),
              buffer[0], buffer[1], 
              len >= 1 ? data[0] : 0, 
              len >= 2 ? data[1] : 0);
@@ -276,7 +277,7 @@ esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, si
 
     i2c_master_start(i2c_cmd);
     i2c_master_write_byte(i2c_cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_cmd, 0x3E, true);  // Start at register 0x3E
+    i2c_master_write_byte(i2c_cmd, static_cast<uint8_t>(Reg::SubcommandLow), true);
     i2c_master_write(i2c_cmd, buffer, 2 + len, true);  // Address + data
     i2c_master_stop(i2c_cmd);
 
@@ -290,7 +291,8 @@ esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, si
     ESP_LOGI(TAG_BQ, "  -> Step 1 SUCCESS");
     
     // Write checksum and length
-    ESP_LOGI(TAG_BQ, "  -> Step 2: Write to 0x60: checksum=0x%02X, length=0x%02X", checksum, (uint8_t)(len + 4));
+    ESP_LOGI(TAG_BQ, "  -> Step 2: Write to 0x%02X: checksum=0x%02X, length=0x%02X", 
+             static_cast<uint8_t>(Reg::Checksum), checksum, (uint8_t)(len + 4));
     
     i2c_cmd = i2c_cmd_link_create();
     if (!i2c_cmd) {
@@ -301,7 +303,7 @@ esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, si
     uint8_t checksum_len[2] = {checksum, (uint8_t)(len + 4)};  // Length includes address(2) + data + checksum + len bytes
     i2c_master_start(i2c_cmd);
     i2c_master_write_byte(i2c_cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_cmd, 0x60, true);  // Checksum register
+    i2c_master_write_byte(i2c_cmd, static_cast<uint8_t>(Reg::Checksum), true);
     i2c_master_write(i2c_cmd, checksum_len, 2, true);
     i2c_master_stop(i2c_cmd);
 
