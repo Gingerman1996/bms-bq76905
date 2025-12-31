@@ -40,7 +40,7 @@ public:
         SubcommandHigh = 0x3F,   // Subcommand address MSB
         TransferBuffer = 0x40,   // Transfer buffer start (0x40-0x5F)
         Checksum       = 0x60,   // Checksum for Data Memory write
-        DataLength     = 0x61,   // Data length for Data Memory write
+        DataLength     = 0x61,   // Data length for Data Memory writeƒƒƒ
         
         // Alarm and control registers
         AlarmStatus    = 0x62,   // Alarm status
