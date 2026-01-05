@@ -1,6 +1,6 @@
 #include "BQ25672.h"
 #include "bq76905.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,36 +36,23 @@ static const char *TAG = "BMS_APP";
 #define BQ25672_CHARGE_CURRENT_MA 500 // <-- Change here if needed
 // ============================================================
 
-#define I2C_MASTER_SCL_IO 6         /*!< GPIO number used for I2C master clock */
-#define I2C_MASTER_SDA_IO 7         /*!< GPIO number used for I2C master data */
-#define I2C_MASTER_NUM 0            /*!< I2C master i2c port number */
-#define I2C_MASTER_FREQ_HZ 100000   /*!< I2C master clock frequency */
-#define I2C_MASTER_TX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
-#define I2C_MASTER_RX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
+#define I2C_MASTER_SCL_IO GPIO_NUM_6 /*!< GPIO number used for I2C master clock */
+#define I2C_MASTER_SDA_IO GPIO_NUM_7 /*!< GPIO number used for I2C master data */
+#define I2C_MASTER_NUM 0    /*!< I2C master i2c port number */
 
 #define GPIO_PIN_CHECK GPIO_NUM_18
 #define GPIO_PIN_ALERT GPIO_NUM_19
 
-static esp_err_t i2c_master_init(void) {
-  int i2c_master_port = I2C_MASTER_NUM;
+static esp_err_t i2c_master_init(i2c_master_bus_handle_t *bus_handle) {
+  i2c_master_bus_config_t conf = {};
+  conf.i2c_port = I2C_MASTER_NUM;
+  conf.sda_io_num = I2C_MASTER_SDA_IO;
+  conf.scl_io_num = I2C_MASTER_SCL_IO;
+  conf.clk_source = I2C_CLK_SRC_DEFAULT;
+  conf.glitch_ignore_cnt = 7;
+  conf.flags.enable_internal_pullup = true;
 
-  i2c_config_t conf = {
-      .mode = I2C_MODE_MASTER,
-      .sda_io_num = I2C_MASTER_SDA_IO,
-      .scl_io_num = I2C_MASTER_SCL_IO,
-      .sda_pullup_en = GPIO_PULLUP_ENABLE,
-      .scl_pullup_en = GPIO_PULLUP_ENABLE,
-      .master =
-          {
-              .clk_speed = I2C_MASTER_FREQ_HZ,
-          },
-      .clk_flags = 0,
-  };
-
-  i2c_param_config((i2c_port_t)i2c_master_port, &conf);
-
-  return i2c_driver_install((i2c_port_t)i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE,
-                            I2C_MASTER_TX_BUF_DISABLE, 0);
+  return i2c_new_master_bus(&conf, bus_handle);
 }
 
 extern "C" void app_main(void) {
@@ -88,12 +75,13 @@ extern "C" void app_main(void) {
   if (gpio_get_level(GPIO_PIN_CHECK) == 0) {
     ESP_LOGI(TAG, "GPIO 18 is LOW, proceeding with BMS configuration...");
 
-    ESP_ERROR_CHECK(i2c_master_init());
+    i2c_master_bus_handle_t i2c_bus = nullptr;
+    ESP_ERROR_CHECK(i2c_master_init(&i2c_bus));
     ESP_LOGI(TAG, "I2C initialized successfully");
 
     BQ25672 charger;
     bool charger_ready = false;
-    if (charger.begin((i2c_port_t)I2C_MASTER_NUM) == ESP_OK) {
+    if (charger.begin(i2c_bus) == ESP_OK) {
       ESP_LOGI(TAG, "BQ25672 initialized successfully");
 
 #if BATTERY_TYPE == 0
@@ -115,7 +103,7 @@ extern "C" void app_main(void) {
       ESP_LOGW(TAG, "BQ25672 initialization failed");
     }
 
-    BQ76905 bms((i2c_port_t)I2C_MASTER_NUM);
+    BQ76905 bms(i2c_bus);
 
     if (bms.begin() == ESP_OK) {
       ESP_LOGI(TAG, "BMS initialized successfully");

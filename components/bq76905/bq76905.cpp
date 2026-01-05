@@ -2,8 +2,10 @@
 
 #include <cctype>
 #include <cmath>
-#include "freertos/FreeRTOS.h"
+#include <cstring>
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG_BQ = "BQ76905";
 
@@ -40,13 +42,15 @@ static constexpr float NTC_R_PU = 20000.0f;      // Internal Pull-up 20k Ohm
 static constexpr float NTC_R_25 = 10000.0f;      // NTC resistance at 25C = 10k Ohm
 static constexpr float NTC_B_CONSTANT = 3950.0f; // B-constant of NTC
 static constexpr float NTC_T_25_KELVIN = 298.15f; // 25 degrees Celsius in Kelvin
+static constexpr int kI2cSpeedHz = 100000;
+static constexpr size_t kI2cMaxWriteLen = 64;
 
-BQ76905::BQ76905(i2c_port_t port, uint8_t addr)
-    : _port(port), _addr(addr), _timeout_ms(1000) {
+BQ76905::BQ76905(i2c_master_bus_handle_t bus_handle, uint8_t addr)
+    : _bus_handle(bus_handle), _addr(addr), _timeout_ms(1000) {
 }
 
-uint32_t BQ76905::_timeoutTicks() const {
-    return pdMS_TO_TICKS(_timeout_ms);
+int BQ76905::_timeoutMs() const {
+    return static_cast<int>(_timeout_ms);
 }
 
 void BQ76905::setTimeout(uint32_t timeout_ms) {
@@ -65,7 +69,7 @@ esp_err_t BQ76905::readReg(Reg reg, uint8_t *data, size_t len) {
     ESP_LOGD(TAG_BQ, "[READ] Reg=0x%02X, Len=%d", reg_addr, (int)len);
 #endif
 
-    esp_err_t err = i2c_master_write_read_device(_port, _addr, &reg_addr, 1, data, len, _timeoutTicks());
+    esp_err_t err = i2c_master_transmit_receive(_dev_handle, &reg_addr, 1, data, len, _timeoutMs());
 
 #if BQ76905_DEBUG_LOG
     if (err == ESP_OK) {
@@ -90,21 +94,16 @@ esp_err_t BQ76905::writeReg(Reg reg, const uint8_t *data, size_t len) {
     }
 #endif
 
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    if (!cmd) {
-        return ESP_ERR_NO_MEM;
+    if (len > kI2cMaxWriteLen) {
+        return ESP_ERR_INVALID_ARG;
     }
 
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, static_cast<uint8_t>(reg), true);
+    uint8_t tx_buf[kI2cMaxWriteLen + 1] = {0};
+    tx_buf[0] = static_cast<uint8_t>(reg);
     if (len > 0) {
-        i2c_master_write(cmd, (uint8_t *)data, len, true);
+        memcpy(&tx_buf[1], data, len);
     }
-    i2c_master_stop(cmd);
-
-    esp_err_t err = i2c_master_cmd_begin(_port, cmd, _timeoutTicks());
-    i2c_cmd_link_delete(cmd);
+    esp_err_t err = i2c_master_transmit(_dev_handle, tx_buf, len + 1, _timeoutMs());
 
 #if BQ76905_DEBUG_LOG
     if (err == ESP_OK) {
@@ -146,6 +145,22 @@ esp_err_t BQ76905::writeU16LE(Reg reg, uint16_t value) {
 
 esp_err_t BQ76905::begin() {
     uint8_t status = 0;
+    if (_bus_handle == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (_dev_handle == nullptr) {
+        i2c_device_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = _addr,
+            .scl_speed_hz = kI2cSpeedHz,
+            .scl_wait_us = 0,
+            .flags = {}
+        };
+        esp_err_t err = i2c_master_bus_add_device(_bus_handle, &dev_cfg, &_dev_handle);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
     return readU8(Reg::ControlStatus, status);
 }
 
@@ -189,9 +204,9 @@ esp_err_t BQ76905::getTemperature(float &temp_c) {
         return err;
     }
 
-    // Internal temperature is in 0.1 Kelvin units
-    // Convert to Celsius: (raw * 0.1) - 273.15
-    temp_c = (static_cast<float>(raw) * 0.1f) - 273.15f;
+    ESP_LOGI(TAG_BQ, "[INt temp] Raw: %u", raw);
+
+    temp_c = static_cast<float>(static_cast<int16_t>(raw));
     return ESP_OK;
 }
 
@@ -381,21 +396,14 @@ esp_err_t BQ76905::sendSubcommand(SubCmd cmd) {
     
     ESP_LOGI(TAG_BQ, "[SUBCMD] Sending subcommand 0x%04X to register 0x%02X", cmd_val, static_cast<uint8_t>(Reg::SubcommandLow));
     ESP_LOGI(TAG_BQ, "  -> Data: [0x%02X, 0x%02X]", data[0], data[1]);
-    
-    i2c_cmd_handle_t i2c_cmd = i2c_cmd_link_create();
-    if (!i2c_cmd) {
-        ESP_LOGE(TAG_BQ, "  -> FAILED: Could not create I2C command");
-        return ESP_ERR_NO_MEM;
-    }
 
-    i2c_master_start(i2c_cmd);
-    i2c_master_write_byte(i2c_cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_cmd, static_cast<uint8_t>(Reg::SubcommandLow), true);
-    i2c_master_write(i2c_cmd, data, 2, true);
-    i2c_master_stop(i2c_cmd);
+    uint8_t tx_buf[3] = {
+        static_cast<uint8_t>(Reg::SubcommandLow),
+        data[0],
+        data[1],
+    };
 
-    esp_err_t err = i2c_master_cmd_begin(_port, i2c_cmd, _timeoutTicks());
-    i2c_cmd_link_delete(i2c_cmd);
+    esp_err_t err = i2c_master_transmit(_dev_handle, tx_buf, sizeof(tx_buf), _timeoutMs());
     
     if (err == ESP_OK) {
         ESP_LOGI(TAG_BQ, "  -> SUCCESS");
@@ -442,20 +450,10 @@ esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, si
              len >= 2 ? data[1] : 0);
     
     // Write address + data in one transaction
-    i2c_cmd_handle_t i2c_cmd = i2c_cmd_link_create();
-    if (!i2c_cmd) {
-        ESP_LOGE(TAG_BQ, "  -> FAILED: Could not create I2C command");
-        return ESP_ERR_NO_MEM;
-    }
-
-    i2c_master_start(i2c_cmd);
-    i2c_master_write_byte(i2c_cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_cmd, static_cast<uint8_t>(Reg::SubcommandLow), true);
-    i2c_master_write(i2c_cmd, buffer, 2 + len, true);  // Address + data
-    i2c_master_stop(i2c_cmd);
-
-    esp_err_t err = i2c_master_cmd_begin(_port, i2c_cmd, _timeoutTicks());
-    i2c_cmd_link_delete(i2c_cmd);
+    uint8_t tx_buf[1 + 2 + 32] = {0};
+    tx_buf[0] = static_cast<uint8_t>(Reg::SubcommandLow);
+    memcpy(&tx_buf[1], buffer, 2 + len);
+    esp_err_t err = i2c_master_transmit(_dev_handle, tx_buf, 1 + 2 + len, _timeoutMs());
     
     if (err != ESP_OK) {
         ESP_LOGE(TAG_BQ, "  -> Step 1 FAILED: %s (0x%x)", esp_err_to_name(err), err);
@@ -467,21 +465,12 @@ esp_err_t BQ76905::writeSubcommandData(uint16_t address, const uint8_t *data, si
     ESP_LOGI(TAG_BQ, "  -> Step 2: Write to 0x%02X: checksum=0x%02X, length=0x%02X", 
              static_cast<uint8_t>(Reg::Checksum), checksum, (uint8_t)(len + 4));
     
-    i2c_cmd = i2c_cmd_link_create();
-    if (!i2c_cmd) {
-        ESP_LOGE(TAG_BQ, "  -> FAILED: Could not create I2C command");
-        return ESP_ERR_NO_MEM;
-    }
-
-    uint8_t checksum_len[2] = {checksum, (uint8_t)(len + 4)};  // Length includes address(2) + data + checksum + len bytes
-    i2c_master_start(i2c_cmd);
-    i2c_master_write_byte(i2c_cmd, (_addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(i2c_cmd, static_cast<uint8_t>(Reg::Checksum), true);
-    i2c_master_write(i2c_cmd, checksum_len, 2, true);
-    i2c_master_stop(i2c_cmd);
-
-    err = i2c_master_cmd_begin(_port, i2c_cmd, _timeoutTicks());
-    i2c_cmd_link_delete(i2c_cmd);
+    uint8_t checksum_len[3] = {
+        static_cast<uint8_t>(Reg::Checksum),
+        checksum,
+        (uint8_t)(len + 4)
+    };  // Length includes address(2) + data + checksum + len bytes
+    err = i2c_master_transmit(_dev_handle, checksum_len, sizeof(checksum_len), _timeoutMs());
     
     if (err == ESP_OK) {
         ESP_LOGI(TAG_BQ, "  -> Step 2 SUCCESS");

@@ -1,7 +1,7 @@
 #ifndef BQ25672_H
 #define BQ25672_H
 
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_err.h"
 #include <cstdint>
 
@@ -27,7 +27,7 @@ public:
   };
 
   // Initialize and enable ADC
-  esp_err_t begin(i2c_port_t port);
+  esp_err_t begin(i2c_master_bus_handle_t busHandle);
 
   // Configure charger limits and SOC mapping for the battery type.
   // charge_current_ma = 0 keeps the existing charge current limit.
@@ -63,7 +63,7 @@ public:
 
 private:
   const char *const TAG = "BQ25672";
-  i2c_port_t _port = I2C_NUM_0;
+  i2c_master_dev_handle_t _dev_handle = nullptr;
 
   // Defaults match a 3S Li-ion pack (9.0V-12.6V) for SOC mapping.
   uint16_t _battery_empty_mv = 9000;

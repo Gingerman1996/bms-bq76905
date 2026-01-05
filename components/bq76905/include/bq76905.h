@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_err.h"
 
 class BQ76905 {
@@ -117,7 +117,7 @@ public:
 
   static constexpr uint8_t kMaxCells = 5;
 
-  BQ76905(i2c_port_t port, uint8_t addr = 0x08);
+    BQ76905(i2c_master_bus_handle_t bus_handle, uint8_t addr = 0x08);
 
   // Probe the device with a basic read.
   esp_err_t begin();
@@ -160,9 +160,10 @@ public:
   esp_err_t getSafetyStatusB(uint8_t &status);
 
 private:
-  i2c_port_t _port;
-  uint8_t _addr;
-  uint32_t _timeout_ms;
+    i2c_master_bus_handle_t _bus_handle = nullptr;
+    i2c_master_dev_handle_t _dev_handle = nullptr;
+    uint8_t _addr;
+    uint32_t _timeout_ms;
 
-  uint32_t _timeoutTicks() const;
+    int _timeoutMs() const;
 };

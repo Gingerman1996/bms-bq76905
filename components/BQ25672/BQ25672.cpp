@@ -1,14 +1,13 @@
 #define LOG_LOCAL_LEVEL ESP_LOG_VERBOSE
 
 #include "BQ25672.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include <cstdint>
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #define MILLIS() ((uint32_t)(esp_timer_get_time() / 1000))
 
@@ -63,16 +62,29 @@ uint16_t clampU16(uint16_t value, uint16_t min_value, uint16_t max_value) {
 BQ25672::BQ25672() {}
 BQ25672::~BQ25672() {}
 
-esp_err_t BQ25672::begin(i2c_port_t port) {
-  _port = port;
+esp_err_t BQ25672::begin(i2c_master_bus_handle_t busHandle) {
+  if (busHandle == nullptr) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  // Check if address exist on i2c line
+  ESP_RETURN_ON_ERROR(i2c_master_probe(busHandle, BQ25672_I2C_ADDRESS, 1000), TAG,
+                      "BQ25672 address (0x%.2x) not found", BQ25672_I2C_ADDRESS);
+
   esp_log_level_set(TAG, ESP_LOG_VERBOSE);
+
+  // Initialize i2c device
+  i2c_device_config_t dev_cfg = {
+      .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+      .device_address = BQ25672_I2C_ADDRESS,
+      .scl_speed_hz = 500000,
+      .scl_wait_us = 0,
+      .flags = {}
+  };
+  ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(busHandle, &dev_cfg, &_dev_handle), TAG,
+                      "Failed add i2c device of BQ25672");
 
   // To hold read register output
   uint16_t value;
-
-  // Probe device by reading a status register
-  ESP_RETURN_ON_ERROR(writeReadRegister(REG_SYSTEM_STATUS, 1, &value), TAG,
-                      "BQ25672 address (0x%.2x) not found", BQ25672_I2C_ADDRESS);
 
   // Enable MPPT
   ESP_RETURN_ON_ERROR(writeRegister(0x15, 0xAB), TAG, "Failed write to enable MPPT");
@@ -411,11 +423,9 @@ void BQ25672::printControlAndConfiguration() {
 
 esp_err_t BQ25672::writeRegister(uint8_t reg, uint8_t value) {
   uint8_t txBuf[2] = {reg, value};
-  ESP_RETURN_ON_ERROR(i2c_master_write_to_device(_port, BQ25672_I2C_ADDRESS, txBuf,
-                                                 sizeof(txBuf), pdMS_TO_TICKS(500)),
-                      TAG,
-                      "i2c_master_write_to_device, write register failed (r: 0x%.2x, v:0x%.2x)",
-                      reg, value);
+  ESP_RETURN_ON_ERROR(i2c_master_transmit(_dev_handle, txBuf, sizeof(txBuf), 500), TAG,
+                      "i2c_master_transmit, write register failed (r: 0x%.2x, v:0x%.2x)", reg,
+                      value);
   return ESP_OK;
 }
 
@@ -423,20 +433,17 @@ esp_err_t BQ25672::writeRegister16(uint8_t reg, uint16_t value) {
   uint8_t txBuf[3] = {reg, static_cast<uint8_t>(value >> 8),
                       static_cast<uint8_t>(value & 0xFF)};
   ESP_RETURN_ON_ERROR(
-      i2c_master_write_to_device(_port, BQ25672_I2C_ADDRESS, txBuf, sizeof(txBuf),
-                                 pdMS_TO_TICKS(500)),
-      TAG, "i2c_master_write_to_device, write register16 failed (r: 0x%.2x, v:0x%.4x)",
-      reg, value);
+      i2c_master_transmit(_dev_handle, txBuf, sizeof(txBuf), 500), TAG,
+      "i2c_master_transmit, write register16 failed (r: 0x%.2x, v:0x%.4x)", reg,
+      value);
   return ESP_OK;
 }
 
 esp_err_t BQ25672::writeReadRegister(uint8_t reg, int size, uint16_t *output) {
   uint8_t buffer[2] = {0};
-  ESP_RETURN_ON_ERROR(
-      i2c_master_write_read_device(_port, BQ25672_I2C_ADDRESS, &reg, 1, buffer, size,
-                                   pdMS_TO_TICKS(500)),
-      TAG,
-      "i2c_master_write_read_device, write and read register failed (r: 0x%.2x)", reg);
+  ESP_RETURN_ON_ERROR(i2c_master_transmit_receive(_dev_handle, &reg, 1, buffer, size, 500), TAG,
+                      "i2c_master_transmit_receive, write and read register failed (r: 0x%.2x)",
+                      reg);
 
   // Compile result
   uint16_t value = 0;
