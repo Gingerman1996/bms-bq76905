@@ -1,3 +1,4 @@
+#include "BQ25672.h"
 #include "bq76905.h"
 #include "driver/i2c.h"
 #include "esp_log.h"
@@ -24,13 +25,21 @@ static const char *TAG = "BMS_APP";
 // ============================================================
 // Number of battery cells in series (valid: 3, 4, or 5)
 // ============================================================
-#define CELL_COUNT 5 // <-- Change here: 3, 4, or 5 cells
+#define CELL_COUNT 3 // <-- Change here: 3, 4, or 5 cells
 // ============================================================
 
-#define I2C_MASTER_SCL_IO 6       /*!< GPIO number used for I2C master clock */
-#define I2C_MASTER_SDA_IO 7       /*!< GPIO number used for I2C master data */
-#define I2C_MASTER_NUM 0          /*!< I2C master i2c port number */
-#define I2C_MASTER_FREQ_HZ 100000 /*!< I2C master clock frequency */
+// ============================================================
+// BQ25672 CHARGE CURRENT CONFIGURATION
+// ============================================================
+// Set to 0 to keep the charger default.
+// ============================================================
+#define BQ25672_CHARGE_CURRENT_MA 500 // <-- Change here if needed
+// ============================================================
+
+#define I2C_MASTER_SCL_IO 6         /*!< GPIO number used for I2C master clock */
+#define I2C_MASTER_SDA_IO 7         /*!< GPIO number used for I2C master data */
+#define I2C_MASTER_NUM 0            /*!< I2C master i2c port number */
+#define I2C_MASTER_FREQ_HZ 100000   /*!< I2C master clock frequency */
 #define I2C_MASTER_TX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
 #define I2C_MASTER_RX_BUF_DISABLE 0 /*!< I2C master doesn't need buffer */
 
@@ -55,16 +64,16 @@ static esp_err_t i2c_master_init(void) {
 
   i2c_param_config((i2c_port_t)i2c_master_port, &conf);
 
-  return i2c_driver_install((i2c_port_t)i2c_master_port, conf.mode,
-                            I2C_MASTER_RX_BUF_DISABLE,
+  return i2c_driver_install((i2c_port_t)i2c_master_port, conf.mode, I2C_MASTER_RX_BUF_DISABLE,
                             I2C_MASTER_TX_BUF_DISABLE, 0);
 }
 
 extern "C" void app_main(void) {
   // Set log levels at startup
-  esp_log_level_set("*", ESP_LOG_INFO);           // Default all components to INFO
-  esp_log_level_set("BQ76905", ESP_LOG_DEBUG);    // BQ76905 driver to DEBUG
-  esp_log_level_set("BMS_APP", ESP_LOG_DEBUG);    // Main app to DEBUG
+  esp_log_level_set("*", ESP_LOG_INFO);        // Default all components to INFO
+  esp_log_level_set("BQ76905", ESP_LOG_DEBUG); // BQ76905 driver to DEBUG
+  esp_log_level_set("BQ25672", ESP_LOG_INFO);  // BQ25672 charger to INFO
+  esp_log_level_set("BMS_APP", ESP_LOG_DEBUG); // Main app to DEBUG
 
   // Initialize GPIOs
   gpio_config_t io_conf = {};
@@ -72,8 +81,7 @@ extern "C" void app_main(void) {
   io_conf.mode = GPIO_MODE_INPUT;
   io_conf.pin_bit_mask = (1ULL << GPIO_PIN_CHECK) | (1ULL << GPIO_PIN_ALERT);
   io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-  io_conf.pull_up_en =
-      GPIO_PULLUP_ENABLE; // Assume pull-up needed for checking "LOW"
+  io_conf.pull_up_en = GPIO_PULLUP_ENABLE; // Assume pull-up needed for checking "LOW"
   gpio_config(&io_conf);
 
   // Check if GPIO 18 is LOW
@@ -82,6 +90,30 @@ extern "C" void app_main(void) {
 
     ESP_ERROR_CHECK(i2c_master_init());
     ESP_LOGI(TAG, "I2C initialized successfully");
+
+    BQ25672 charger;
+    bool charger_ready = false;
+    if (charger.begin((i2c_port_t)I2C_MASTER_NUM) == ESP_OK) {
+      ESP_LOGI(TAG, "BQ25672 initialized successfully");
+
+#if BATTERY_TYPE == 0
+      esp_err_t charger_result = charger.configureBattery(BQ25672::BatteryType::LFP, CELL_COUNT,
+                                                          BQ25672_CHARGE_CURRENT_MA);
+#else
+      esp_err_t charger_result = charger.configureBattery(BQ25672::BatteryType::LiIon, CELL_COUNT,
+                                                          BQ25672_CHARGE_CURRENT_MA);
+#endif
+
+      if (charger_result == ESP_OK) {
+        charger_ready = true;
+        ESP_LOGI(TAG, "BQ25672 configuration: SUCCESS");
+        charger.printControlAndConfiguration();
+      } else {
+        ESP_LOGE(TAG, "BQ25672 configuration: FAILED (0x%x)", charger_result);
+      }
+    } else {
+      ESP_LOGW(TAG, "BQ25672 initialization failed");
+    }
 
     BQ76905 bms((i2c_port_t)I2C_MASTER_NUM);
 
@@ -101,19 +133,16 @@ extern "C" void app_main(void) {
 
 #if BATTERY_TYPE == 0
       // LFP (LiFePO4) battery - 18650Fe1600-WT
-      esp_err_t setup_result =
-          bms.fullConfiguration(BQ76905::BatteryType::LFP, CELL_COUNT);
+      esp_err_t setup_result = bms.fullConfiguration(BQ76905::BatteryType::LFP, CELL_COUNT);
 #else
       // Li-ion (NMC/LCO) battery
-      esp_err_t setup_result =
-          bms.fullConfiguration(BQ76905::BatteryType::LiIon, CELL_COUNT);
+      esp_err_t setup_result = bms.fullConfiguration(BQ76905::BatteryType::LiIon, CELL_COUNT);
 #endif
 
       if (setup_result == ESP_OK) {
         ESP_LOGI(TAG, ">>> Full Configuration Result: SUCCESS <<<");
       } else {
-        ESP_LOGE(TAG, ">>> Full Configuration Result: FAILED (0x%x) <<<",
-                 setup_result);
+        ESP_LOGE(TAG, ">>> Full Configuration Result: FAILED (0x%x) <<<", setup_result);
       }
 
       ESP_LOGI(TAG, "");
@@ -123,9 +152,23 @@ extern "C" void app_main(void) {
 
       while (1) {
         // Repeatedly read status every 5 seconds
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(5000));
 
         ESP_LOGI(TAG, "--- Reading BMS Data ---");
+
+        if (charger_ready) {
+          charger.update();
+
+          uint16_t vbat_mv = 0;
+          uint16_t vbus_mv = 0;
+          float soc_pct = 0.0f;
+          if (charger.getVBAT(&vbat_mv) == ESP_OK && charger.getVBUS(&vbus_mv) == ESP_OK &&
+              charger.getBatteryPercentage(&soc_pct) == ESP_OK) {
+            ESP_LOGI(TAG, "Charger: VBAT=%u mV, VBUS=%u mV, SOC=%.1f%%", vbat_mv, vbus_mv, soc_pct);
+          } else {
+            ESP_LOGW(TAG, "Charger read failed");
+          }
+        }
 
         int16_t current_ma = 0;
         if (bms.getCurrent(current_ma) == ESP_OK) {

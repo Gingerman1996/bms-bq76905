@@ -662,9 +662,9 @@ esp_err_t BQ76905::fullConfiguration(BatteryType type, uint8_t cell_count) {
     // Bit0: FET_EN = 1 (Enable autonomous FET control)
     // Bit2: SFET = 1 (Series FET configuration)
     // Bit3: CHGFET = 1 (CHG FET present)
-    // Value: 0x0D = 0b00001101
+    // Value: 0x1D = 0b00011101
     ESP_LOGI(TAG_BQ, "Setting FET_OPTIONS (FET_EN=1, SFET=1, CHGFET=1)...");
-    err = writeDataMemory8(ADDR_FET_OPTIONS, 0x0D);
+    err = writeDataMemory8(ADDR_FET_OPTIONS, 0x1D);
     if (err != ESP_OK) {
         ESP_LOGE(TAG_BQ, "FAILED to write FET_OPTIONS!");
         setConfigUpdateMode(false);
