@@ -1,10 +1,39 @@
 #include "bq76905.h"
 
+#include <cctype>
 #include <cmath>
 #include "freertos/FreeRTOS.h"
 #include "esp_log.h"
 
 static const char *TAG_BQ = "BQ76905";
+
+// ============================================================
+// DEBUG LOGGING CONFIGURATION
+// ============================================================
+// Set to 1 to enable debug logging (hex data sent/received)
+// Set to 0 to disable debug logging
+// ============================================================
+#define BQ76905_DEBUG_LOG 1
+// ============================================================
+
+#if BQ76905_DEBUG_LOG
+// Helper function to print data as hex string
+static void logHexData(const char* prefix, const uint8_t *data, size_t len) {
+    if (len == 0 || data == nullptr) return;
+    
+    char hex_str[128] = {0};  // Max 42 bytes * 3 chars = 126
+    size_t offset = 0;
+    size_t max_bytes = (len > 40) ? 40 : len;  // Limit to 40 bytes
+    
+    for (size_t i = 0; i < max_bytes && offset < sizeof(hex_str) - 4; i++) {
+        offset += snprintf(hex_str + offset, sizeof(hex_str) - offset, "%02X ", data[i]);
+    }
+    if (len > 40) {
+        snprintf(hex_str + offset, sizeof(hex_str) - offset, "...");
+    }
+    ESP_LOGD(TAG_BQ, "%s [%d bytes]: %s", prefix, (int)len, hex_str);
+}
+#endif
 
 // NTC Thermistor constants for temperature calculation
 static constexpr float NTC_R_PU = 20000.0f;      // Internal Pull-up 20k Ohm
@@ -31,13 +60,35 @@ esp_err_t BQ76905::readReg(Reg reg, uint8_t *data, size_t len) {
         return ESP_ERR_INVALID_ARG;
     }
     uint8_t reg_addr = static_cast<uint8_t>(reg);
-    return i2c_master_write_read_device(_port, _addr, &reg_addr, 1, data, len, _timeoutTicks());
+    
+#if BQ76905_DEBUG_LOG
+    ESP_LOGD(TAG_BQ, "[READ] Reg=0x%02X, Len=%d", reg_addr, (int)len);
+#endif
+
+    esp_err_t err = i2c_master_write_read_device(_port, _addr, &reg_addr, 1, data, len, _timeoutTicks());
+
+#if BQ76905_DEBUG_LOG
+    if (err == ESP_OK) {
+        logHexData("[READ] RX", data, len);
+    } else {
+        ESP_LOGD(TAG_BQ, "[READ] FAILED: %s (0x%x)", esp_err_to_name(err), err);
+    }
+#endif
+
+    return err;
 }
 
 esp_err_t BQ76905::writeReg(Reg reg, const uint8_t *data, size_t len) {
     if (!data && len > 0) {
         return ESP_ERR_INVALID_ARG;
     }
+
+#if BQ76905_DEBUG_LOG
+    ESP_LOGD(TAG_BQ, "[WRITE] Reg=0x%02X, Len=%d", static_cast<uint8_t>(reg), (int)len);
+    if (len > 0) {
+        logHexData("[WRITE] TX", data, len);
+    }
+#endif
 
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     if (!cmd) {
@@ -54,6 +105,15 @@ esp_err_t BQ76905::writeReg(Reg reg, const uint8_t *data, size_t len) {
 
     esp_err_t err = i2c_master_cmd_begin(_port, cmd, _timeoutTicks());
     i2c_cmd_link_delete(cmd);
+
+#if BQ76905_DEBUG_LOG
+    if (err == ESP_OK) {
+        ESP_LOGD(TAG_BQ, "[WRITE] SUCCESS");
+    } else {
+        ESP_LOGD(TAG_BQ, "[WRITE] FAILED: %s (0x%x)", esp_err_to_name(err), err);
+    }
+#endif
+
     return err;
 }
 
@@ -109,14 +169,14 @@ esp_err_t BQ76905::getPackVoltage(uint16_t &voltage_mv) {
     return readU16LE(Reg::StackVoltage, voltage_mv);
 }
 
-esp_err_t BQ76905::getCurrent(int16_t &current_usera) {
+esp_err_t BQ76905::getCurrent(int16_t &current_ma) {
     uint16_t raw = 0;
     esp_err_t err = readU16LE(Reg::Current, raw);
     if (err != ESP_OK) {
         return err;
     }
 
-    current_usera = static_cast<int16_t>(raw);
+    current_ma = static_cast<int16_t>(raw);
     return ESP_OK;
 }
 
@@ -194,6 +254,119 @@ esp_err_t BQ76905::getRawCurrent(int32_t &raw_current) {
 
 esp_err_t BQ76905::clearAlarmStatus(uint8_t mask) {
     return writeU8(Reg::AlarmStatus, mask);
+}
+
+// ========== Status Checking and Diagnostics ==========
+
+esp_err_t BQ76905::getBatteryStatus(uint16_t &status) {
+    return readU16LE(Reg::BatteryStatus, status);
+}
+
+esp_err_t BQ76905::getSafetyStatusA(uint8_t &status) {
+    return readU8(Reg::SafetyStatusA, status);
+}
+
+esp_err_t BQ76905::getSafetyStatusB(uint8_t &status) {
+    return readU8(Reg::SafetyStatusB, status);
+}
+
+esp_err_t BQ76905::checkStatus() {
+    ESP_LOGI(TAG_BQ, "");
+    ESP_LOGI(TAG_BQ, "========== BMS STATUS CHECK ==========");
+    
+    // 1. Read Battery Status (16-bit)
+    uint16_t batteryStatus = 0;
+    esp_err_t err = getBatteryStatus(batteryStatus);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_BQ, "Failed to read Battery Status");
+        return err;
+    }
+    
+    ESP_LOGI(TAG_BQ, "--- Battery Status (0x%04X) ---", batteryStatus);
+    
+    // Check Safety Status fault flag
+    if (batteryStatus & BATT_SS) {
+        ESP_LOGW(TAG_BQ, "[!] SS: Safety Status Fault detected!");
+    }
+    
+    // Check FET control status
+    if (batteryStatus & BATT_FET_EN) {
+        ESP_LOGI(TAG_BQ, "[OK] FET_EN: Autonomous FET control active");
+    }
+    
+    // Check FET states
+    ESP_LOGI(TAG_BQ, "CHG FET: %s", (batteryStatus & BATT_CHG_FET) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "DSG FET: %s", (batteryStatus & BATT_DSG_FET) ? "ON" : "OFF");
+    
+    // 2. Read Safety Status A (voltage/current faults - common cause of FET pulse)
+    uint8_t safetyA = 0;
+    err = getSafetyStatusA(safetyA);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_BQ, "Failed to read Safety Status A");
+        return err;
+    }
+    
+    if (safetyA > 0) {
+        ESP_LOGW(TAG_BQ, "--- Safety Status A: Faults (0x%02X) ---", safetyA);
+        if (safetyA & SAFETY_A_COV) {
+            ESP_LOGW(TAG_BQ, "-> COV: Cell Overvoltage");
+        }
+        if (safetyA & SAFETY_A_CUV) {
+            ESP_LOGW(TAG_BQ, "-> CUV: Cell Undervoltage");
+        }
+        if (safetyA & SAFETY_A_SCD) {
+            // Short circuit is a common cause of FET pulsing
+            ESP_LOGE(TAG_BQ, "-> SCD: Short Circuit in Discharge (!!)");
+        }
+        if (safetyA & SAFETY_A_OCD1) {
+            ESP_LOGW(TAG_BQ, "-> OCD1: Overcurrent Discharge 1");
+        }
+        if (safetyA & SAFETY_A_OCD2) {
+            ESP_LOGW(TAG_BQ, "-> OCD2: Overcurrent Discharge 2");
+        }
+        if (safetyA & SAFETY_A_OCC) {
+            ESP_LOGW(TAG_BQ, "-> OCC: Overcurrent in Charge");
+        }
+        if (safetyA & SAFETY_A_CURLATCH) {
+            // Current protection latched - FET will stay off until cleared
+            ESP_LOGE(TAG_BQ, "-> CURLATCH: Current Protection Latched (permanent shutdown)");
+        }
+    } else {
+        ESP_LOGI(TAG_BQ, "--- Safety Status A: No faults ---");
+    }
+    
+    // 3. Read Safety Status B (temperature/system faults)
+    uint8_t safetyB = 0;
+    err = getSafetyStatusB(safetyB);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_BQ, "Failed to read Safety Status B");
+        return err;
+    }
+    
+    if (safetyB > 0) {
+        ESP_LOGW(TAG_BQ, "--- Safety Status B: System/Temp Faults (0x%02X) ---", safetyB);
+        if (safetyB & SAFETY_B_OTD) {
+            ESP_LOGW(TAG_BQ, "-> OTD: Overtemperature Discharge");
+        }
+        if (safetyB & SAFETY_B_OTC) {
+            ESP_LOGW(TAG_BQ, "-> OTC: Overtemperature Charge");
+        }
+        if (safetyB & SAFETY_B_UTD) {
+            ESP_LOGW(TAG_BQ, "-> UTD: Undertemperature Discharge");
+        }
+        if (safetyB & SAFETY_B_UTC) {
+            ESP_LOGW(TAG_BQ, "-> UTC: Undertemperature Charge");
+        }
+        if (safetyB & SAFETY_B_HWD) {
+            // Host watchdog - FET will pulse if host doesn't send commands
+            ESP_LOGW(TAG_BQ, "-> HWD: Host Watchdog Timeout (FET may pulse)");
+        }
+    } else {
+        ESP_LOGI(TAG_BQ, "--- Safety Status B: No faults ---");
+    }
+    
+    ESP_LOGI(TAG_BQ, "========================================");
+    return ESP_OK;
 }
 
 // ========== Subcommand Access Functions ==========
@@ -586,18 +759,18 @@ esp_err_t BQ76905::fullConfiguration(BatteryType type, uint8_t cell_count) {
     uint16_t otc_thresh, otd_thresh, utc_thresh, utd_thresh;
     
     if (type == BatteryType::LFP) {
-        // LFP: Charge 0-60°C, Discharge -40°C to 60°C
-        otc_thresh = 2476;   // ~60°C for charge overtemp
-        otd_thresh = 2476;   // ~60°C for discharge overtemp
-        utc_thresh = 19284;  // ~0°C for charge undertemp
-        utd_thresh = 26000;  // ~-40°C for discharge undertemp (LFP can handle extreme cold)
+        // LFP: Charge -30°C to 60°C, Discharge -40°C to 60°C
+        otc_thresh = 40;   // ~60°C for charge overtemp
+        otd_thresh = 40;   // ~60°C for discharge overtemp
+        utc_thresh = 230;  // ~-30°C for charge undertemp
+        utd_thresh = 241;  // ~-40°C for discharge undertemp
     } else {
         // Li-ion: More restrictive temperature range
         // Charge 0-45°C, Discharge -20°C to 60°C
-        otc_thresh = 3200;   // ~45°C for charge overtemp
-        otd_thresh = 2476;   // ~60°C for discharge overtemp
-        utc_thresh = 19284;  // ~0°C for charge undertemp
-        utd_thresh = 22000;  // ~-20°C for discharge undertemp
+        otc_thresh = 65;   // ~45°C for charge overtemp
+        otd_thresh = 40;   // ~60°C for discharge overtemp
+        utc_thresh = 158;  // ~0°C for charge undertemp
+        utd_thresh = 212;  // ~-20°C for discharge undertemp
     }
     
     ESP_LOGI(TAG_BQ, "OTC=%u, OTD=%u, UTC=%u, UTD=%u (ADC counts)", otc_thresh, otd_thresh, utc_thresh, utd_thresh);

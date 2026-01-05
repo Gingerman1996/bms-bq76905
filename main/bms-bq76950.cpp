@@ -16,7 +16,15 @@ static const char *TAG = "BMS_APP";
 //   0 = LFP (LiFePO4)  - COV: 3.65V, CUV: 2.0V
 //   1 = Li-ion (NMC/LCO) - COV: 4.2V, CUV: 3.0V
 // ============================================================
-#define BATTERY_TYPE 1 // <-- Change here: 0=LFP, 1=Li-ion
+#define BATTERY_TYPE 0 // <-- Change here: 0=LFP, 1=Li-ion
+// ============================================================
+
+// ============================================================
+// BATTERY CELL COUNT CONFIGURATION
+// ============================================================
+// Number of battery cells in series (valid: 3, 4, or 5)
+// ============================================================
+#define CELL_COUNT 5 // <-- Change here: 3, 4, or 5 cells
 // ============================================================
 
 #define I2C_MASTER_SCL_IO 6       /*!< GPIO number used for I2C master clock */
@@ -53,6 +61,11 @@ static esp_err_t i2c_master_init(void) {
 }
 
 extern "C" void app_main(void) {
+  // Set log levels at startup
+  esp_log_level_set("*", ESP_LOG_INFO);           // Default all components to INFO
+  esp_log_level_set("BQ76905", ESP_LOG_DEBUG);    // BQ76905 driver to DEBUG
+  esp_log_level_set("BMS_APP", ESP_LOG_DEBUG);    // Main app to DEBUG
+
   // Initialize GPIOs
   gpio_config_t io_conf = {};
   io_conf.intr_type = GPIO_INTR_DISABLE;
@@ -89,11 +102,11 @@ extern "C" void app_main(void) {
 #if BATTERY_TYPE == 0
       // LFP (LiFePO4) battery - 18650Fe1600-WT
       esp_err_t setup_result =
-          bms.fullConfiguration(BQ76905::BatteryType::LFP, 5);
+          bms.fullConfiguration(BQ76905::BatteryType::LFP, CELL_COUNT);
 #else
       // Li-ion (NMC/LCO) battery
       esp_err_t setup_result =
-          bms.fullConfiguration(BQ76905::BatteryType::LiIon, 3);
+          bms.fullConfiguration(BQ76905::BatteryType::LiIon, CELL_COUNT);
 #endif
 
       if (setup_result == ESP_OK) {
@@ -110,13 +123,13 @@ extern "C" void app_main(void) {
 
       while (1) {
         // Repeatedly read status every 5 seconds
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(100));
 
         ESP_LOGI(TAG, "--- Reading BMS Data ---");
 
-        int16_t current_usera = 0;
-        if (bms.getCurrent(current_usera) == ESP_OK) {
-          ESP_LOGI(TAG, "Current (userA): %d", current_usera);
+        int16_t current_ma = 0;
+        if (bms.getCurrent(current_ma) == ESP_OK) {
+          ESP_LOGI(TAG, "Current: %d mA", current_ma);
         } else {
           ESP_LOGW(TAG, "Current read failed");
         }
@@ -158,6 +171,10 @@ extern "C" void app_main(void) {
         }
 
         ESP_LOGI(TAG, "Alert Pin: %d", gpio_get_level(GPIO_PIN_ALERT));
+
+        // Check BMS safety status and faults
+        bms.checkStatus();
+
         ESP_LOGI(TAG, "------------------------");
       }
     } else {

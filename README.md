@@ -98,9 +98,9 @@ bms.getCellVoltage(1, cell_mv);
 uint16_t pack_mv;
 bms.getPackVoltage(pack_mv);
 
-// Current
-int16_t current;
-bms.getCurrent(current);
+// Current (mA)
+int16_t current_ma;
+bms.getCurrent(current_ma);
 
 // Internal temperature
 float internal_temp;

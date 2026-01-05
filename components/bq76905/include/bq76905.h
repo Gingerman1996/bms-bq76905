@@ -52,6 +52,28 @@ public:
         ChgPwm         = 0x6C,   // Charge PWM
     };
 
+    // Safety Status A bit definitions (voltage/current faults)
+    static constexpr uint8_t SAFETY_A_COV       = (1 << 7);  // Cell Overvoltage
+    static constexpr uint8_t SAFETY_A_CUV       = (1 << 6);  // Cell Undervoltage
+    static constexpr uint8_t SAFETY_A_SCD       = (1 << 5);  // Short Circuit Discharge
+    static constexpr uint8_t SAFETY_A_OCD1      = (1 << 4);  // Overcurrent Discharge 1
+    static constexpr uint8_t SAFETY_A_OCD2      = (1 << 3);  // Overcurrent Discharge 2
+    static constexpr uint8_t SAFETY_A_OCC       = (1 << 2);  // Overcurrent Charge
+    static constexpr uint8_t SAFETY_A_CURLATCH  = (1 << 1);  // Current Protection Latched
+
+    // Safety Status B bit definitions (temperature/system faults)
+    static constexpr uint8_t SAFETY_B_OTD       = (1 << 7);  // Overtemperature Discharge
+    static constexpr uint8_t SAFETY_B_OTC       = (1 << 6);  // Overtemperature Charge
+    static constexpr uint8_t SAFETY_B_UTD       = (1 << 5);  // Undertemperature Discharge
+    static constexpr uint8_t SAFETY_B_UTC       = (1 << 4);  // Undertemperature Charge
+    static constexpr uint8_t SAFETY_B_HWD       = (1 << 2);  // Host Watchdog Timeout
+
+    // Battery Status bit definitions
+    static constexpr uint16_t BATT_SS           = (1 << 12); // Safety Status Fault
+    static constexpr uint16_t BATT_FET_EN       = (1 << 8);  // Autonomous FET Control Active
+    static constexpr uint16_t BATT_CHG_FET      = (1 << 3);  // Charge FET State
+    static constexpr uint16_t BATT_DSG_FET      = (1 << 2);  // Discharge FET State
+
     // Subcommand addresses for Data Memory access
     enum class SubCmd : uint16_t {
         SET_CFGUPDATE = 0x0090,
@@ -101,7 +123,7 @@ public:
     // High-level BMS functions (units follow datasheet definitions).
     esp_err_t getCellVoltage(uint8_t cell_idx, uint16_t &voltage_mv);
     esp_err_t getPackVoltage(uint16_t &voltage_mv);
-    esp_err_t getCurrent(int16_t &current_usera);
+    esp_err_t getCurrent(int16_t &current_ma);
     esp_err_t getTemperature(float &temp_c);
     esp_err_t getTSTemperature(float &temp_c);  // External NTC thermistor
     esp_err_t getRawCurrent(int32_t &raw_current);
@@ -126,6 +148,12 @@ public:
     esp_err_t writeSubcommandData(uint16_t address, const uint8_t *data, size_t len);
 
     esp_err_t clearAlarmStatus(uint8_t mask);
+
+    // Status checking and diagnostics
+    esp_err_t checkStatus();  // Check BMS status and log any faults
+    esp_err_t getBatteryStatus(uint16_t &status);
+    esp_err_t getSafetyStatusA(uint8_t &status);
+    esp_err_t getSafetyStatusB(uint8_t &status);
 
 private:
     i2c_port_t _port;
