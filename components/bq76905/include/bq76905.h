@@ -155,6 +155,7 @@ public:
 
   // Status checking and diagnostics
   esp_err_t checkStatus(); // Check BMS status and log any faults
+  esp_err_t logControlAndBatteryStatus(); // Log 0x00/0x12 status fields before config
   esp_err_t getBatteryStatus(uint16_t &status);
   esp_err_t getSafetyStatusA(uint8_t &status);
   esp_err_t getSafetyStatusB(uint8_t &status);

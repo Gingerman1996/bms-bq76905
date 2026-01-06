@@ -285,6 +285,62 @@ esp_err_t BQ76905::getSafetyStatusB(uint8_t &status) {
     return readU8(Reg::SafetyStatusB, status);
 }
 
+esp_err_t BQ76905::logControlAndBatteryStatus() {
+    uint16_t control_status = 0;
+    esp_err_t err = readU16LE(Reg::ControlStatus, control_status);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_BQ, "Failed to read Control Status (0x00)");
+        return err;
+    }
+
+    ESP_LOGI(TAG_BQ, "");
+    ESP_LOGI(TAG_BQ, "========== PRE-CONFIG STATUS ==========");
+    ESP_LOGI(TAG_BQ, "Control Status (0x00): 0x%04X", control_status);
+
+    uint16_t battery_status = 0;
+    err = getBatteryStatus(battery_status);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG_BQ, "Failed to read Battery Status (0x12)");
+        return err;
+    }
+
+    ESP_LOGI(TAG_BQ, "Battery Status (0x12): 0x%04X", battery_status);
+    ESP_LOGI(TAG_BQ, "SLEEP: %s", (battery_status & (1 << 15)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "DEEPSLEEP: %s", (battery_status & (1 << 14)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "SA (Safety Alert): %s", (battery_status & (1 << 13)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "SS (Safety Fault): %s", (battery_status & (1 << 12)) ? "ON" : "OFF");
+    uint8_t sec_state = (battery_status >> 10) & 0x03;
+    const char *sec_name = "Unknown";
+    switch (sec_state) {
+    case 0:
+        sec_name = "Not Initialized";
+        break;
+    case 1:
+        sec_name = "Full Access";
+        break;
+    case 2:
+        sec_name = "Unused";
+        break;
+    case 3:
+        sec_name = "Sealed";
+        break;
+    default:
+        break;
+    }
+    ESP_LOGI(TAG_BQ, "SEC1:SEC0: %u (%s)", sec_state, sec_name);
+    ESP_LOGI(TAG_BQ, "FET_EN: %s", (battery_status & (1 << 8)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "POR: %s", (battery_status & (1 << 7)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "SLEEP_EN: %s", (battery_status & (1 << 6)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "CFGUPDATE: %s", (battery_status & (1 << 5)) ? "ON" : "OFF");
+    ESP_LOGI(TAG_BQ, "ALERTPIN: %s", (battery_status & (1 << 4)) ? "ASSERTED" : "NOT ASSERTED");
+    ESP_LOGI(TAG_BQ, "CHG driver: %s", (battery_status & (1 << 3)) ? "ENABLED" : "DISABLED");
+    ESP_LOGI(TAG_BQ, "DSG driver: %s", (battery_status & (1 << 2)) ? "ENABLED" : "DISABLED");
+    ESP_LOGI(TAG_BQ, "CHGDETFLAG: %s", (battery_status & (1 << 1)) ? "HIGH" : "LOW");
+    ESP_LOGI(TAG_BQ, "========================================");
+
+    return ESP_OK;
+}
+
 esp_err_t BQ76905::checkStatus() {
     ESP_LOGI(TAG_BQ, "");
     ESP_LOGI(TAG_BQ, "========== BMS STATUS CHECK ==========");

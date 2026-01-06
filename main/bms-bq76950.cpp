@@ -107,6 +107,7 @@ extern "C" void app_main(void) {
 
     if (bms.begin() == ESP_OK) {
       ESP_LOGI(TAG, "BMS initialized successfully");
+      bms.logControlAndBatteryStatus();
 
       // ============================================================
       // Full BMS Configuration (based on BATTERY_TYPE define)
